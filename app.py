@@ -131,11 +131,15 @@ def format_currency(value):
 
 def create_bonus_schedule_dataframe(processed_df):
     """Create formatted bonus schedule dataframe"""
-    # Format currency columns
-    for col in ['Contract Sales Price', 'Reductions', 'Cash to Seller', 'Asset Cost', 'Gross Profit']:
-        processed_df[col] = processed_df[col].apply(format_currency)
+    # Create a copy to avoid modifying original
+    display_df = processed_df.copy()
     
-    return processed_df
+    # Format currency columns - handle both numeric and string values
+    currency_columns = ['Contract Sales Price', 'Reductions', 'Cash to Seller', 'Asset Cost', 'Gross Profit']
+    for col in currency_columns:
+        display_df[col] = display_df[col].apply(lambda x: format_currency(float(x)) if pd.notna(x) else "$0.00")
+    
+    return display_df
 
 def export_to_excel(processed_df, month_ending_date, subtotal, prior_adj, total):
     """Export bonus schedule to Excel with formatting"""
@@ -206,15 +210,12 @@ if uploaded_file is not None:
         if processed_df is None or len(processed_df) == 0:
             st.warning(f"⚠️ No sold properties found for {month_ending.strftime('%B %Y')}")
         else:
-            # Calculate totals
-            # Parse currency strings back to float for calculation
-            gross_profits = []
-            for val in processed_df['Gross Profit']:
-                clean_val = val.replace('$', '').replace(',', '')
-                gross_profits.append(float(clean_val))
-            
-            subtotal = sum(gross_profits)
+            # Calculate totals BEFORE formatting
+            subtotal = processed_df['Gross Profit'].sum()
             total = subtotal + prior_adjustment
+            
+            # Now format for display
+            display_df = create_bonus_schedule_dataframe(processed_df)
             
             # Display Summary
             st.header("📊 Bonus Schedule Summary")
@@ -233,9 +234,6 @@ if uploaded_file is not None:
             
             # Display the bonus schedule
             st.header("💰 Bonus Schedule Details")
-            
-            # Format for display
-            display_df = processed_df.copy()
             
             st.dataframe(
                 display_df,
@@ -291,9 +289,9 @@ if uploaded_file is not None:
             col1, col2 = st.columns(2)
             
             with col1:
-                # Excel Export
+                # Excel Export - use formatted display version
                 excel_data = export_to_excel(
-                    processed_df.copy(), 
+                    display_df.copy(), 
                     month_ending, 
                     format_currency(subtotal),
                     format_currency(prior_adjustment),
@@ -310,8 +308,8 @@ if uploaded_file is not None:
                 )
             
             with col2:
-                # CSV Export
-                csv = processed_df.to_csv(index=False)
+                # CSV Export - use formatted display version
+                csv = display_df.to_csv(index=False)
                 csv_filename = f"{month_ending.strftime('%Y%m%d')}_Remarkable_Land_Bonus_Schedule.csv"
                 
                 st.download_button(
