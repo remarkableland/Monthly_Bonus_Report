@@ -1,602 +1,685 @@
 import streamlit as st
 import pandas as pd
-from reportlab.lib.pagesizes import letter, landscape
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from datetime import datetime
-from io import BytesIO
+import io
 
 st.set_page_config(
-    page_title="Remarkable Land Bonus Schedule Generator",
-    page_icon="📊",
+    page_title="Bonus Schedule Generator",
+    page_icon="💰",
     layout="wide"
 )
 
-st.title("📊 Remarkable Land® Bonus Schedule Generator")
-st.markdown("Generate professional bonus schedule PDFs with improved formatting")
+st.title("💰 Remarkable Land Bonus Schedule Generator")
+st.markdown("Generate bonus schedules from Close.com export data")
 
-# Create tabs for different input methods
-tab1, tab2 = st.tabs(["📤 Upload CSV", "✏️ Manual Entry"])
+# Configuration Section
+st.sidebar.header("Configuration")
 
-def create_bonus_schedule_pdf(data, month_ending, prior_adjustment=0.00):
-    """
-    Generate a professional bonus schedule PDF
+# Month/Period Selection
+month_ending = st.sidebar.date_input(
+    "Month Ending Date",
+    value=datetime.now().replace(day=1) if datetime.now().day == 1 else datetime.now()
+)
+
+# Team Member Names (for signatures)
+st.sidebar.subheader("Team Members")
+team_members = st.sidebar.text_area(
+    "Enter team member names (one per line)",
+    value="Brandi Freeman\nLauren Forbis\nRobert O. Dow",
+    height=150
+)
+team_list = [name.strip() for name in team_members.split('\n') if name.strip()]
+
+# Additional Costs Configuration
+st.sidebar.subheader("Standard Costs")
+mls_cost = st.sidebar.number_input("MLS Cost", value=500, min_value=0)
+
+# Prior Adjustment
+prior_adjustment = st.sidebar.number_input(
+    "Prior Adjustment Amount", 
+    value=0.00,
+    format="%.2f",
+    help="Adjustments from previous bonus schedules"
+)
+
+# File Upload
+uploaded_file = st.file_uploader(
+    "Upload Close.com Export CSV", 
+    type=['csv'],
+    help="Upload your 'Selling_Land_leads' export from Close.com"
+)
+
+def extract_county_from_display_name(display_name):
+    """Extract county from display name like 'TX Hidalgo Mujica...'"""
+    if pd.isna(display_name):
+        return "Unknown"
+    parts = str(display_name).split()
+    if len(parts) >= 2:
+        return parts[1]  # Second word is typically the county
+    return "Unknown"
+
+def extract_grantor_from_display_name(display_name):
+    """Extract grantor name from display name like 'OK McIntosh Engebretson...'"""
+    if pd.isna(display_name):
+        return "Unknown"
+    parts = str(display_name).split()
+    if len(parts) >= 3:
+        return parts[2]  # Third word is typically the grantor
+    return "Unknown"
+
+def process_close_export(df, month_ending_date):
+    """Process Close.com export and extract relevant fields"""
     
-    Args:
-        data: DataFrame with columns: Funding Date, State, County, Grantor, APN, 
-              Contract Sales Price, Reductions, Cash to Seller, Asset Cost, Gross Profit
-        month_ending: Date string for the month ending
-        prior_adjustment: Prior adjustment amount (default 0.00)
-    """
-    buffer = BytesIO()
+    # Filter for sold properties in the specified month
+    df['primary_opportunity_date_won'] = pd.to_datetime(df['primary_opportunity_date_won'], errors='coerce')
     
-    # Create PDF with narrow margins
+    # Filter by month and year
+    month_start = pd.Timestamp(month_ending_date.replace(day=1))
+    if month_ending_date.month == 12:
+        month_end = pd.Timestamp(month_ending_date.replace(year=month_ending_date.year + 1, month=1, day=1))
+    else:
+        month_end = pd.Timestamp(month_ending_date.replace(month=month_ending_date.month + 1, day=1))
+    
+    df_filtered = df[
+        (df['primary_opportunity_date_won'] >= month_start) & 
+        (df['primary_opportunity_date_won'] < month_end) &
+        (df['primary_opportunity_status_label'] == 'Sold')
+    ].copy()
+    
+    if len(df_filtered) == 0:
+        return None
+    
+    # Extract required fields
+    results = []
+    for _, row in df_filtered.iterrows():
+        # Extract data from available fields
+        funding_date = pd.to_datetime(row['custom.Asset_Date_Sold']).strftime('%m/%d/%y') if pd.notna(row['custom.Asset_Date_Sold']) else ''
+        state = row['custom.All_State'] if pd.notna(row['custom.All_State']) else ''
+        county = extract_county_from_display_name(row['display_name'])
+        grantor = extract_grantor_from_display_name(row['display_name'])
+        apn = row['custom.All_APN'] if pd.notna(row['custom.All_APN']) else ''
+        
+        # Financial data
+        contract_price = float(row['custom.Asset_Gross_Sales_Price']) if pd.notna(row['custom.Asset_Gross_Sales_Price']) else 0.0
+        closing_costs = float(row['custom.Asset_Closing_Costs']) if pd.notna(row['custom.Asset_Closing_Costs']) else 0.0
+        cost_basis = float(row['custom.Asset_Cost_Basis']) if pd.notna(row['custom.Asset_Cost_Basis']) else 0.0
+        
+        # Calculate derived values
+        reductions = closing_costs  # Using closing costs as "reductions"
+        cash_to_seller = contract_price - reductions
+        asset_cost = cost_basis + mls_cost  # Add MLS cost to cost basis
+        gross_profit = cash_to_seller - asset_cost
+        
+        results.append({
+            'Funding Date': funding_date,
+            'State': state,
+            'County': county,
+            'Grantor': grantor,
+            'APN': apn,
+            'Contract Sales Price': contract_price,
+            'Reductions': reductions,
+            'Cash to Seller': cash_to_seller,
+            'Asset Cost': asset_cost,
+            'Gross Profit': gross_profit
+        })
+    
+    return pd.DataFrame(results)
+
+def format_currency(value):
+    """Format number as currency"""
+    return f"${value:,.2f}"
+
+def create_bonus_schedule_dataframe(processed_df):
+    """Create formatted bonus schedule dataframe"""
+    # Create a copy to avoid modifying original
+    display_df = processed_df.copy()
+    
+    # Format currency columns - handle both numeric and string values
+    currency_columns = ['Contract Sales Price', 'Reductions', 'Cash to Seller', 'Asset Cost', 'Gross Profit']
+    for col in currency_columns:
+        display_df[col] = display_df[col].apply(lambda x: format_currency(float(x)) if pd.notna(x) else "$0.00")
+    
+    return display_df
+
+def export_to_excel(processed_df, month_ending_date, subtotal, prior_adj, total):
+    """Export bonus schedule to Excel with formatting"""
+    output = io.BytesIO()
+    
+    # Create Excel writer
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Write main data
+        processed_df.to_excel(writer, sheet_name='Bonus Schedule', index=False, startrow=2)
+        
+        # Get workbook and worksheet
+        workbook = writer.book
+        worksheet = writer.sheets['Bonus Schedule']
+        
+        # Add header
+        worksheet['A1'] = f'Remarkable Land® Bonus Schedule'
+        worksheet['A2'] = f'Month Ending: {month_ending_date.strftime("%m/%d/%Y")}'
+        
+        # Add totals
+        last_row = len(processed_df) + 4
+        worksheet[f'I{last_row}'] = 'SUBTOTAL'
+        worksheet[f'J{last_row}'] = subtotal
+        
+        worksheet[f'I{last_row+1}'] = 'PRIOR ADJUSTMENT'
+        worksheet[f'J{last_row+1}'] = prior_adj
+        
+        worksheet[f'I{last_row+2}'] = 'TOTAL'
+        worksheet[f'J{last_row+2}'] = total
+        
+        # Bold the header
+        from openpyxl.styles import Font, Alignment
+        worksheet['A1'].font = Font(bold=True, size=14)
+        worksheet['A2'].font = Font(bold=True)
+        
+        # Bold totals
+        for row_num in [last_row, last_row+1, last_row+2]:
+            worksheet[f'I{row_num}'].font = Font(bold=True)
+            worksheet[f'J{row_num}'].font = Font(bold=True)
+        
+        # Adjust column widths
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+    
+    output.seek(0)
+    return output
+
+def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, team_members):
+    """Export bonus schedule to PDF with signature lines"""
+    try:
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    except ImportError:
+        return None
+    
+    buffer = io.BytesIO()
+    
+    # Create PDF in LANDSCAPE orientation
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=landscape(letter),
-        topMargin=0.5*inch,
-        bottomMargin=0.5*inch,
+        pagesize=landscape(letter),  # 11" x 8.5" landscape
+        rightMargin=0.5*inch,
         leftMargin=0.5*inch,
-        rightMargin=0.5*inch
+        topMargin=0.5*inch,
+        bottomMargin=0.5*inch
     )
     
-    # Get styles
+    # Container for the 'Flowable' objects
+    elements = []
+    
+    # Define styles
     styles = getSampleStyleSheet()
     
-    # Create custom styles
+    # Title style
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
         fontSize=16,
-        textColor=colors.HexColor('#1f4e78'),
+        textColor=colors.HexColor('#1f4788'),
+        spaceAfter=6,
         alignment=TA_CENTER,
-        spaceAfter=6
+        fontName='Helvetica-Bold'
     )
     
+    # Subtitle style
     subtitle_style = ParagraphStyle(
-        'Subtitle',
+        'CustomSubtitle',
         parent=styles['Normal'],
         fontSize=11,
+        spaceAfter=20,
         alignment=TA_CENTER,
-        spaceAfter=12
+        fontName='Helvetica'
     )
     
-    header_style = ParagraphStyle(
-        'HeaderStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        alignment=TA_CENTER,
-        textColor=colors.white,
-        leading=10
-    )
+    # Add title
+    elements.append(Paragraph("Remarkable Land® Bonus Schedule", title_style))
+    elements.append(Paragraph(f"Month Ending: {month_ending_date.strftime('%B %d, %Y')}", subtitle_style))
     
-    cell_style = ParagraphStyle(
-        'CellStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        alignment=TA_CENTER
-    )
+    # Prepare table data
+    table_data = []
     
-    notes_style = ParagraphStyle(
-        'NotesStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
-        spaceAfter=4
-    )
+    # Header row
+    headers = list(processed_df.columns)
+    table_data.append(headers)
     
-    # Build the document
-    story = []
+    # Data rows
+    for _, row in processed_df.iterrows():
+        table_data.append(list(row))
     
-    # Title
-    title = Paragraph("Remarkable Land<super>®</super> Bonus Schedule", title_style)
-    story.append(title)
+    # Add empty row for spacing
+    table_data.append([''] * len(headers))
     
-    # Subtitle
-    subtitle = Paragraph(f"Month Ending: {month_ending}", subtitle_style)
-    story.append(subtitle)
-    story.append(Spacer(1, 0.1*inch))
+    # Add totals rows
+    empty_cols = [''] * (len(headers) - 2)
+    table_data.append(empty_cols + ['SUBTOTAL:', subtotal])
+    table_data.append(empty_cols + ['PRIOR ADJUSTMENT:', prior_adj])
+    table_data.append(empty_cols + ['TOTAL:', total])
     
-    # Table data with wrapped headers
-    table_data = [
-        # Headers
-        [
-            Paragraph("<b>Funding<br/>Date</b>", header_style),
-            Paragraph("<b>State</b>", header_style),
-            Paragraph("<b>County</b>", header_style),
-            Paragraph("<b>Grantor</b>", header_style),
-            Paragraph("<b>APN</b>", header_style),
-            Paragraph("<b>Contract<br/>Sales Price</b>", header_style),
-            Paragraph("<b>Reductions</b>", header_style),
-            Paragraph("<b>Cash to<br/>Seller</b>", header_style),
-            Paragraph("<b>Asset<br/>Cost</b>", header_style),
-            Paragraph("<b>Gross<br/>Profit</b>", header_style),
-        ],
-    ]
-    
-    # Add data rows
-    for _, row in data.iterrows():
-        # Format APN with line breaks for long numbers
-        apn = str(row['APN'])
-        if len(apn) > 15:
-            # Add line break in the middle for long APNs
-            mid = len(apn) // 2
-            apn_formatted = f"{apn[:mid]}<br/>{apn[mid:]}"
-        else:
-            apn_formatted = apn
-        
-        table_data.append([
-            Paragraph(row['Funding Date'], cell_style),
-            Paragraph(str(row['State']), cell_style),
-            Paragraph(str(row['County']), cell_style),
-            Paragraph(str(row['Grantor']), cell_style),
-            Paragraph(apn_formatted, cell_style),
-            Paragraph(f"${float(row['Contract Sales Price']):,.2f}", cell_style),
-            Paragraph(f"${float(row['Reductions']):,.2f}", cell_style),
-            Paragraph(f"${float(row['Cash to Seller']):,.2f}", cell_style),
-            Paragraph(f"${float(row['Asset Cost']):,.2f}", cell_style),
-            Paragraph(f"${float(row['Gross Profit']):,.2f}", cell_style),
-        ])
-    
-    # Column widths
+    # Create table with adjusted column widths for landscape
+    # Total width available: ~10 inches (11" - 1" margins)
     col_widths = [
         0.7*inch,   # Funding Date
-        0.5*inch,   # State
+        0.4*inch,   # State
         0.8*inch,   # County
         0.9*inch,   # Grantor
-        1.3*inch,   # APN (widened)
-        0.95*inch,  # Contract Sales Price
+        1.4*inch,   # APN
+        1.1*inch,   # Contract Sales Price
         0.8*inch,   # Reductions
-        0.9*inch,   # Cash to Seller
-        0.85*inch,  # Asset Cost
-        0.85*inch,  # Gross Profit
+        1.1*inch,   # Cash to Seller
+        0.9*inch,   # Asset Cost
+        0.9*inch    # Gross Profit
     ]
     
-    # Create table
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
     
-    # Table styling with alternating row colors
-    style_commands = [
+    # Table style
+    table.setStyle(TableStyle([
         # Header row
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4e78')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 9),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
         ('TOPPADDING', (0, 0), (-1, 0), 8),
         
         # Data rows
-        ('ALIGN', (0, 1), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 1), (-1, -1), 9),
-        ('TOPPADDING', (0, 1), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+        ('FONTNAME', (0, 1), (-1, -4), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -4), 8),
+        ('ALIGN', (0, 1), (4, -4), 'LEFT'),
+        ('ALIGN', (5, 1), (-1, -4), 'RIGHT'),
+        ('GRID', (0, 0), (-1, -4), 0.5, colors.grey),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 1), (-1, -4), 4),
+        ('BOTTOMPADDING', (0, 1), (-1, -4), 4),
         
-        # Grid
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor('#1f4e78')),
-    ]
-    
-    # Add alternating row colors
-    for i in range(1, len(table_data)):
-        if i % 2 == 1:
-            style_commands.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor('#e7f0f7')))
-        else:
-            style_commands.append(('BACKGROUND', (0, i), (-1, i), colors.white))
-    
-    table.setStyle(TableStyle(style_commands))
-    
-    story.append(table)
-    story.append(Spacer(1, 0.2*inch))
-    
-    # Calculate totals
-    subtotal = data['Gross Profit'].sum()
-    total = subtotal + prior_adjustment
-    
-    # Totals section
-    totals_data = [
-        ['', '', '', '', '', '', '', '', 'SUBTOTAL:', f'${subtotal:,.2f}'],
-        ['', '', '', '', '', '', '', '', 'PRIOR ADJUSTMENT:', f'${prior_adjustment:,.2f}'],
-        ['', '', '', '', '', '', '', '', 'TOTAL:', f'${total:,.2f}'],
-    ]
-    
-    totals_table = Table(totals_data, colWidths=col_widths)
-    totals_table.setStyle(TableStyle([
-        ('ALIGN', (8, 0), (8, -1), 'RIGHT'),
-        ('ALIGN', (9, 0), (9, -1), 'RIGHT'),
-        ('FONTNAME', (8, 0), (9, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (8, 0), (9, -1), 10),
-        ('LINEABOVE', (8, 0), (9, 0), 1, colors.grey),
-        ('LINEABOVE', (8, 2), (9, 2), 2, colors.black),
-        ('TEXTCOLOR', (8, 2), (9, 2), colors.HexColor('#1f4e78')),
+        # Alternate row colors
+        ('ROWBACKGROUNDS', (0, 1), (-1, -4), [colors.white, colors.HexColor('#f0f0f0')]),
+        
+        # Totals rows (bold and right-aligned)
+        ('FONTNAME', (0, -3), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -3), (-1, -1), 10),
+        ('ALIGN', (0, -3), (-1, -1), 'RIGHT'),
+        ('LINEABOVE', (0, -3), (-1, -3), 1.5, colors.black),
+        ('LINEBELOW', (0, -1), (-1, -1), 2, colors.black),
     ]))
     
-    story.append(totals_table)
-    story.append(Spacer(1, 0.2*inch))
+    elements.append(table)
+    elements.append(Spacer(1, 0.3*inch))
     
     # Notes section
-    notes_title = Paragraph("<b>Notes:</b>", notes_style)
-    story.append(notes_title)
-    
-    notes = [
-        "<b>Funding Date:</b> Date funds were available for withdrawal from our account. \"Pending\" funds are not available for withdrawal. Accounting will confirm funding.",
-        "<b>Cash to Seller:</b> Net Cash to Seller on HUD Statement.",
-        "<b>Asset Cost:</b> Net Cash from Buyer on HUD Statement + $500 (which includes MLS) + Direct Property Expenses, including Photographer, Videographer, Legal, etc.",
-        "<b>Reconciliation:</b> All data is subject to a post-payment audit and reconciliation. Future Bonuses will be adjusted accordingly, as required.",
-    ]
-    
-    for note in notes:
-        story.append(Paragraph(note, notes_style))
-    
-    story.append(Spacer(1, 0.2*inch))
-    
-    # Signatures section
-    sig_title = Paragraph("<b>Signatures:</b>", notes_style)
-    story.append(sig_title)
-    story.append(Spacer(1, 0.1*inch))
-    
-    sig_data = [
-        ['Brandi Freeman', '_' * 50, 'Lauren Forbis', '_' * 50],
-        ['', '', '', ''],
-        ['Robert O. Dow', '_' * 50, '', ''],
-    ]
-    
-    sig_table = Table(sig_data, colWidths=[1.5*inch, 2.5*inch, 1.5*inch, 2.5*inch])
-    sig_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-    
-    story.append(sig_table)
-    
-    # Build the PDF
-    doc.build(story)
-    buffer.seek(0)
-    
-    return buffer
-
-# Tab 1: Upload CSV
-with tab1:
-    st.subheader("📤 Upload Bonus Data CSV")
-    
-    st.markdown("""
-    **Required CSV Columns:**
-    - Funding Date
-    - State
-    - County
-    - Grantor
-    - APN
-    - Contract Sales Price
-    - Reductions
-    - Cash to Seller
-    - Asset Cost
-    - Gross Profit
-    """)
-    
-    uploaded_file = st.file_uploader("Choose your bonus data CSV file", type=['csv'])
-    
-    if uploaded_file:
-        try:
-            df = pd.read_csv(uploaded_file)
-            
-            # Validate required columns
-            required_columns = [
-                'Funding Date', 'State', 'County', 'Grantor', 'APN',
-                'Contract Sales Price', 'Reductions', 'Cash to Seller',
-                'Asset Cost', 'Gross Profit'
-            ]
-            
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            
-            if missing_columns:
-                st.error(f"❌ Missing required columns: {', '.join(missing_columns)}")
-                st.write("**Available columns:**", list(df.columns))
-            else:
-                st.success(f"✅ Loaded {len(df)} bonus records successfully!")
-                
-                # Display preview
-                st.subheader("📊 Data Preview")
-                st.dataframe(df, use_container_width=True)
-                
-                # Input fields
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    month_ending = st.text_input(
-                        "Month Ending Date",
-                        value=datetime.now().strftime("%B %d, %Y"),
-                        help="E.g., October 23, 2025"
-                    )
-                
-                with col2:
-                    prior_adjustment = st.number_input(
-                        "Prior Adjustment",
-                        value=0.00,
-                        step=0.01,
-                        format="%.2f",
-                        help="Enter any prior adjustment amount (can be negative)"
-                    )
-                
-                # Generate PDF button
-                if st.button("📄 Generate Bonus Schedule PDF", type="primary"):
-                    with st.spinner("Generating PDF..."):
-                        pdf_buffer = create_bonus_schedule_pdf(df, month_ending, prior_adjustment)
-                        
-                        # Create filename
-                        date_str = datetime.now().strftime("%Y%m%d")
-                        filename = f"{date_str}_Remarkable_Land_Bonus_Schedule.pdf"
-                        
-                        # Download button
-                        st.download_button(
-                            label="📥 Download Bonus Schedule PDF",
-                            data=pdf_buffer,
-                            file_name=filename,
-                            mime="application/pdf"
-                        )
-                        
-                        st.success("✅ PDF generated successfully!")
-                        
-                        # Show summary
-                        st.subheader("📈 Bonus Summary")
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("Total Transactions", len(df))
-                        
-                        with col2:
-                            subtotal = df['Gross Profit'].sum()
-                            st.metric("Subtotal", f"${subtotal:,.2f}")
-                        
-                        with col3:
-                            total = subtotal + prior_adjustment
-                            st.metric("Total (with adjustment)", f"${total:,.2f}")
-        
-        except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
-
-# Tab 2: Manual Entry
-with tab2:
-    st.subheader("✏️ Manual Data Entry")
-    
-    # Input fields for month ending and prior adjustment
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        month_ending_manual = st.text_input(
-            "Month Ending Date",
-            value=datetime.now().strftime("%B %d, %Y"),
-            help="E.g., October 23, 2025",
-            key="manual_month"
-        )
-    
-    with col2:
-        prior_adjustment_manual = st.number_input(
-            "Prior Adjustment",
-            value=0.00,
-            step=0.01,
-            format="%.2f",
-            help="Enter any prior adjustment amount",
-            key="manual_adjustment"
-        )
-    
-    # Number of transactions
-    num_transactions = st.number_input(
-        "Number of Transactions",
-        min_value=1,
-        max_value=20,
-        value=2,
-        step=1
+    notes_style = ParagraphStyle(
+        'Notes',
+        parent=styles['Normal'],
+        fontSize=8,
+        leftIndent=0.2*inch,
+        spaceAfter=4
     )
     
-    # Create data entry form
-    data_rows = []
+    notes_title_style = ParagraphStyle(
+        'NotesTitle',
+        parent=styles['Heading3'],
+        fontSize=10,
+        spaceAfter=8,
+        fontName='Helvetica-Bold'
+    )
     
-    st.markdown("---")
-    st.markdown("### Enter Transaction Details")
+    elements.append(Paragraph("Notes:", notes_title_style))
+    elements.append(Paragraph(
+        "<b>Funding Date:</b> Date funds were available for withdrawal from our account. "
+        "\"Pending\" funds are not available for withdrawal. Accounting will confirm funding.",
+        notes_style
+    ))
+    elements.append(Paragraph(
+        "<b>Cash to Seller:</b> Net Cash to Seller on HUD Statement.",
+        notes_style
+    ))
+    elements.append(Paragraph(
+        "<b>Asset Cost:</b> Net Cash from Buyer on HUD Statement + $500 (which includes MLS) + "
+        "Direct Property Expenses, including Photographer, Videographer, Legal, etc.",
+        notes_style
+    ))
+    elements.append(Paragraph(
+        "<b>Reconciliation:</b> All data is subject to a post-payment audit and reconciliation. "
+        "Future Bonuses will be adjusted accordingly, as required.",
+        notes_style
+    ))
     
-    for i in range(num_transactions):
-        with st.expander(f"Transaction #{i+1}", expanded=(i < 2)):
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                funding_date = st.text_input(
-                    "Funding Date",
-                    value="10/17/25",
-                    key=f"date_{i}"
-                )
-            
-            with col2:
-                state = st.text_input(
-                    "State",
-                    value="TX",
-                    key=f"state_{i}",
-                    max_chars=2
-                )
-            
-            with col3:
-                county = st.text_input(
-                    "County",
-                    value="",
-                    key=f"county_{i}"
-                )
-            
-            with col4:
-                grantor = st.text_input(
-                    "Grantor",
-                    value="",
-                    key=f"grantor_{i}"
-                )
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                apn = st.text_input(
-                    "APN",
-                    value="",
-                    key=f"apn_{i}"
-                )
-            
-            with col2:
-                contract_price = st.number_input(
-                    "Contract Sales Price",
-                    value=0.00,
-                    step=100.00,
-                    format="%.2f",
-                    key=f"contract_{i}"
-                )
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                reductions = st.number_input(
-                    "Reductions",
-                    value=0.00,
-                    step=10.00,
-                    format="%.2f",
-                    key=f"reductions_{i}"
-                )
-            
-            with col2:
-                cash_to_seller = st.number_input(
-                    "Cash to Seller",
-                    value=contract_price - reductions,
-                    step=10.00,
-                    format="%.2f",
-                    key=f"cash_{i}"
-                )
-            
-            with col3:
-                asset_cost = st.number_input(
-                    "Asset Cost",
-                    value=0.00,
-                    step=100.00,
-                    format="%.2f",
-                    key=f"cost_{i}"
-                )
-            
-            with col4:
-                gross_profit = cash_to_seller - asset_cost
-                st.number_input(
-                    "Gross Profit",
-                    value=gross_profit,
-                    step=10.00,
-                    format="%.2f",
-                    key=f"profit_{i}",
-                    disabled=True
-                )
-            
-            # Add to data rows
-            data_rows.append({
-                'Funding Date': funding_date,
-                'State': state,
-                'County': county,
-                'Grantor': grantor,
-                'APN': apn,
-                'Contract Sales Price': contract_price,
-                'Reductions': reductions,
-                'Cash to Seller': cash_to_seller,
-                'Asset Cost': asset_cost,
-                'Gross Profit': gross_profit
-            })
+    elements.append(Spacer(1, 0.3*inch))
     
-    st.markdown("---")
+    # Signature section
+    sig_title_style = ParagraphStyle(
+        'SigTitle',
+        parent=styles['Heading3'],
+        fontSize=11,
+        spaceAfter=12,
+        fontName='Helvetica-Bold'
+    )
     
-    # Generate PDF button
-    if st.button("📄 Generate Bonus Schedule PDF from Manual Entry", type="primary"):
-        # Validate that at least some data is entered
-        if all(row['Grantor'] == '' for row in data_rows):
-            st.warning("⚠️ Please enter at least one transaction with grantor name")
-        else:
-            # Filter out empty rows
-            valid_rows = [row for row in data_rows if row['Grantor'] != '']
+    elements.append(Paragraph("Signatures:", sig_title_style))
+    
+    # Create signature table - 2 signatures per row for landscape
+    if team_members and len(team_members) > 0:
+        num_rows = (len(team_members) + 1) // 2
+        
+        sig_data = []
+        for i in range(num_rows):
+            row = []
             
-            if valid_rows:
-                with st.spinner("Generating PDF..."):
-                    df_manual = pd.DataFrame(valid_rows)
-                    pdf_buffer = create_bonus_schedule_pdf(
-                        df_manual, 
-                        month_ending_manual, 
-                        prior_adjustment_manual
-                    )
-                    
-                    # Create filename
-                    date_str = datetime.now().strftime("%Y%m%d")
-                    filename = f"{date_str}_Remarkable_Land_Bonus_Schedule.pdf"
-                    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download Bonus Schedule PDF",
-                        data=pdf_buffer,
-                        file_name=filename,
-                        mime="application/pdf"
-                    )
-                    
-                    st.success("✅ PDF generated successfully!")
-                    
-                    # Show summary
-                    st.subheader("📈 Bonus Summary")
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Total Transactions", len(valid_rows))
-                    
-                    with col2:
-                        subtotal = sum(row['Gross Profit'] for row in valid_rows)
-                        st.metric("Subtotal", f"${subtotal:,.2f}")
-                    
-                    with col3:
-                        total = subtotal + prior_adjustment_manual
-                        st.metric("Total (with adjustment)", f"${total:,.2f}")
+            # First signature in row
+            if i * 2 < len(team_members):
+                name = team_members[i * 2]
+                row.append(f"{name}")
+                row.append("_" * 35)  # Longer signature line for landscape
+            else:
+                row.append("")
+                row.append("")
+            
+            # Add spacing column
+            row.append("    ")
+            
+            # Second signature in row
+            if i * 2 + 1 < len(team_members):
+                name = team_members[i * 2 + 1]
+                row.append(f"{name}")
+                row.append("_" * 35)  # Longer signature line for landscape
+            else:
+                row.append("")
+                row.append("")
+            
+            sig_data.append(row)
+        
+        # Wider signature areas for landscape
+        sig_table = Table(sig_data, colWidths=[1.8*inch, 2.5*inch, 0.4*inch, 1.8*inch, 2.5*inch])
+        sig_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+            ('ALIGN', (3, 0), (3, -1), 'LEFT'),
+            ('ALIGN', (4, 0), (4, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        
+        elements.append(sig_table)
+    
+    # Build PDF
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+    """Export bonus schedule to Excel with formatting"""
+    output = io.BytesIO()
+    
+    # Create Excel writer
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Write main data
+        processed_df.to_excel(writer, sheet_name='Bonus Schedule', index=False, startrow=2)
+        
+        # Get workbook and worksheet
+        workbook = writer.book
+        worksheet = writer.sheets['Bonus Schedule']
+        
+        # Add header
+        worksheet['A1'] = f'Remarkable Land® Bonus Schedule'
+        worksheet['A2'] = f'Month Ending: {month_ending_date.strftime("%m/%d/%Y")}'
+        
+        # Add totals
+        last_row = len(processed_df) + 4
+        worksheet[f'I{last_row}'] = 'SUBTOTAL'
+        worksheet[f'J{last_row}'] = subtotal
+        
+        worksheet[f'I{last_row+1}'] = 'PRIOR ADJUSTMENT'
+        worksheet[f'J{last_row+1}'] = prior_adj
+        
+        worksheet[f'I{last_row+2}'] = 'TOTAL'
+        worksheet[f'J{last_row+2}'] = total
+        
+        # Bold the header
+        from openpyxl.styles import Font, Alignment
+        worksheet['A1'].font = Font(bold=True, size=14)
+        worksheet['A2'].font = Font(bold=True)
+        
+        # Bold totals
+        for row_num in [last_row, last_row+1, last_row+2]:
+            worksheet[f'I{row_num}'].font = Font(bold=True)
+            worksheet[f'J{row_num}'].font = Font(bold=True)
+        
+        # Adjust column widths
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+    
+    output.seek(0)
+    return output
 
-# Sidebar with instructions
-with st.sidebar:
-    st.header("📋 Instructions")
+# Main Processing
+if uploaded_file is not None:
+    try:
+        # Read the CSV
+        df = pd.read_csv(uploaded_file)
+        
+        st.success(f"✅ Loaded {len(df)} records from Close.com export")
+        
+        # Process the data
+        with st.spinner("Processing sales data..."):
+            processed_df = process_close_export(df, month_ending)
+        
+        if processed_df is None or len(processed_df) == 0:
+            st.warning(f"⚠️ No sold properties found for {month_ending.strftime('%B %Y')}")
+        else:
+            # Calculate totals BEFORE formatting
+            subtotal = processed_df['Gross Profit'].sum()
+            total = subtotal + prior_adjustment
+            
+            # Now format for display
+            display_df = create_bonus_schedule_dataframe(processed_df)
+            
+            # Display Summary
+            st.header("📊 Bonus Schedule Summary")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Properties Sold", len(processed_df))
+            with col2:
+                st.metric("Subtotal", format_currency(subtotal))
+            with col3:
+                st.metric("Prior Adjustment", format_currency(prior_adjustment))
+            with col4:
+                st.metric("Total Bonus", format_currency(total))
+            
+            st.divider()
+            
+            # Display the bonus schedule
+            st.header("💰 Bonus Schedule Details")
+            
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Add totals row
+            st.markdown("---")
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col2:
+                st.markdown("**SUBTOTAL:**")
+                st.markdown("**PRIOR ADJUSTMENT:**")
+                st.markdown("**TOTAL:**")
+            with col3:
+                st.markdown(f"**{format_currency(subtotal)}**")
+                st.markdown(f"**{format_currency(prior_adjustment)}**")
+                st.markdown(f"**{format_currency(total)}**")
+            
+            st.divider()
+            
+            # Notes Section
+            st.header("📝 Notes")
+            st.markdown("""
+            **Funding Date:** Date funds were available for withdrawal from our account. 
+            "Pending" funds are not available for withdrawal. Accounting will confirm funding.
+            
+            **Cash to Seller:** Net Cash to Seller on HUD Statement.
+            
+            **Asset Cost:** Net Cash from Buyer on HUD Statement + $500 (which includes MLS) + 
+            Direct Property Expenses, including Photographer, Videographer, Legal, etc.
+            
+            **Reconciliation:** All data is subject to a post-payment audit and reconciliation. 
+            Future Bonuses will be adjusted accordingly, as required.
+            """)
+            
+            # Signature Section
+            st.header("✍️ Signatures")
+            
+            # Create signature placeholders
+            num_cols = min(len(team_list), 4)
+            if num_cols > 0:
+                cols = st.columns(num_cols)
+                for idx, name in enumerate(team_list):
+                    with cols[idx % num_cols]:
+                        st.markdown(f"**{name}** ☐")
+            
+            st.divider()
+            
+            # Export Options
+            st.header("📥 Download Options")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # PDF Export with signatures
+                pdf_data = export_to_pdf(
+                    display_df.copy(),
+                    month_ending,
+                    format_currency(subtotal),
+                    format_currency(prior_adjustment),
+                    format_currency(total),
+                    team_list
+                )
+                
+                if pdf_data:
+                    pdf_filename = f"{month_ending.strftime('%Y%m%d')}_Remarkable_Land_Bonus_Schedule.pdf"
+                    
+                    st.download_button(
+                        label="📄 Download PDF",
+                        data=pdf_data,
+                        file_name=pdf_filename,
+                        mime="application/pdf",
+                        help="Professional PDF with signature lines"
+                    )
+                else:
+                    st.info("📦 Install reportlab for PDF export: `pip install reportlab`")
+            
+            with col2:
+                # Excel Export - use formatted display version
+                excel_data = export_to_excel(
+                    display_df.copy(), 
+                    month_ending, 
+                    format_currency(subtotal),
+                    format_currency(prior_adjustment),
+                    format_currency(total)
+                )
+                
+                filename = f"{month_ending.strftime('%Y%m%d')}_Remarkable_Land_Bonus_Schedule.xlsx"
+                
+                st.download_button(
+                    label="📊 Download Excel",
+                    data=excel_data,
+                    file_name=filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            
+            with col3:
+                # CSV Export - use formatted display version
+                csv = display_df.to_csv(index=False)
+                csv_filename = f"{month_ending.strftime('%Y%m%d')}_Remarkable_Land_Bonus_Schedule.csv"
+                
+                st.download_button(
+                    label="📄 Download CSV",
+                    data=csv,
+                    file_name=csv_filename,
+                    mime="text/csv"
+                )
+    
+    except Exception as e:
+        st.error(f"❌ Error processing file: {str(e)}")
+        st.exception(e)
+
+else:
+    # Instructions
+    st.info("👆 Upload your Close.com 'Selling_Land_leads' export CSV to generate the bonus schedule")
     
     st.markdown("""
-    ### How to Use
+    ### 📋 Instructions:
     
-    **Option 1: Upload CSV**
-    1. Prepare a CSV file with required columns
-    2. Upload the file
-    3. Review the data preview
-    4. Set month ending date
-    5. Add any prior adjustments
-    6. Generate and download PDF
+    1. **Export from Close.com:**
+       - Go to your "Selling Land" organization
+       - Filter for sold properties
+       - Export as CSV
     
-    **Option 2: Manual Entry**
-    1. Set number of transactions
-    2. Enter details for each transaction
-    3. Set month ending date
-    4. Add any prior adjustments
-    5. Generate and download PDF
+    2. **Configure Settings:**
+       - Set the month ending date (left sidebar)
+       - Adjust team member names for signatures
+       - Set any prior adjustments if needed
     
-    ### Features
+    3. **Upload & Generate:**
+       - Upload your CSV file
+       - Review the generated bonus schedule
+       - Download as PDF (with signatures), Excel, or CSV
     
-    ✅ Landscape orientation for wider tables  
-    ✅ Narrow 0.5" margins  
-    ✅ Wrapped column headers  
-    ✅ Wide APN column (1.3")  
-    ✅ Professional color scheme  
-    ✅ Alternating row colors  
-    ✅ Automatic calculations  
-    ✅ Signature lines included  
-    
-    ### PDF Improvements
-    
-    - **Wider Table:** Uses full page width
-    - **Better APN Display:** Extra wide column with line breaks
-    - **Clean Headers:** Multi-line wrapped text
-    - **Professional Design:** Blue header, alternating rows
-    - **Complete Notes:** All standard disclaimers included
+    ### 💡 Tips:
+    - The app automatically filters for properties sold in the selected month
+    - Asset Cost = Cost Basis + $500 (MLS) + Direct Expenses
+    - Gross Profit = Cash to Seller - Asset Cost
+    - All currency values are formatted automatically
+    - **PDF includes signature lines** for all team members
     """)
     
-    st.markdown("---")
-    st.markdown("**Rainmaker AI Mastery Project**")
-    st.markdown("Version 1.0")
+    # Sample data structure
+    with st.expander("📊 Expected CSV Structure"):
+        st.markdown("""
+        The CSV should contain these key columns:
+        - `primary_opportunity_date_won` - Closing date
+        - `custom.Asset_Date_Sold` - Funding date
+        - `custom.All_State` - Property state
+        - `custom.All_APN` - Property APN
+        - `custom.Asset_Gross_Sales_Price` - Contract price
+        - `custom.Asset_Closing_Costs` - Reductions/costs
+        - `custom.Asset_Cost_Basis` - Original cost basis
+        - `display_name` - Property name (contains county and grantor)
+        """)
+
+# Footer
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; color: gray;'>
+    Built for Remarkable Land® | Bonus Schedule Generator v1.0
+    </div>
+    """,
+    unsafe_allow_html=True
+)
