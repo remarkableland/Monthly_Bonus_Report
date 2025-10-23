@@ -512,7 +512,7 @@ if uploaded_file is not None:
             with col3:
                 st.metric("Prior Adjustment", format_currency(prior_adjustment))
             with col4:
-                st.metric("Total Bonus", format_currency(total))
+                st.metric("Gross Profit Eligible for Bonus", format_currency(total))
             
             st.divider()
             
