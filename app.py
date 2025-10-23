@@ -635,7 +635,7 @@ else:
     
     1. **Export from Close.com:**
        - Go to the "Selling Land" organization
-       - Select the "📊 Bonus Report" smartview
+       - Select the "📊 Bonus Report" smartview 👉 https://app.close.com/leads/save_vSNvWdZP7NWNkQ0vNKMy1mtCEoyaycVXti3YLvT9p21/
        - Export as "All Fields"
     
     2. **Configure Settings:**
