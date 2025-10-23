@@ -25,7 +25,7 @@ month_ending = st.sidebar.date_input(
 st.sidebar.subheader("Team Members")
 team_members = st.sidebar.text_area(
     "Enter team member names (one per line)",
-    value="Brandi Freeman\nRyan Nettleship\nLauren Forbis\nRobert O. Dow",
+    value="Brandi Freeman\nLauren Forbis\nRobert O. Dow",
     height=150
 )
 team_list = [name.strip() for name in team_members.split('\n') if name.strip()]
@@ -195,6 +195,272 @@ def export_to_excel(processed_df, month_ending_date, subtotal, prior_adj, total)
     output.seek(0)
     return output
 
+def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, team_members):
+    """Export bonus schedule to PDF with signature lines"""
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    except ImportError:
+        return None
+    
+    buffer = io.BytesIO()
+    
+    # Create PDF
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=0.5*inch,
+        leftMargin=0.5*inch,
+        topMargin=0.5*inch,
+        bottomMargin=0.5*inch
+    )
+    
+    # Container for the 'Flowable' objects
+    elements = []
+    
+    # Define styles
+    styles = getSampleStyleSheet()
+    
+    # Title style
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        textColor=colors.HexColor('#1f4788'),
+        spaceAfter=6,
+        alignment=TA_CENTER,
+        fontName='Helvetica-Bold'
+    )
+    
+    # Subtitle style
+    subtitle_style = ParagraphStyle(
+        'CustomSubtitle',
+        parent=styles['Normal'],
+        fontSize=11,
+        spaceAfter=20,
+        alignment=TA_CENTER,
+        fontName='Helvetica'
+    )
+    
+    # Add title
+    elements.append(Paragraph("Remarkable Land® Bonus Schedule", title_style))
+    elements.append(Paragraph(f"Month Ending: {month_ending_date.strftime('%B %d, %Y')}", subtitle_style))
+    
+    # Prepare table data
+    table_data = []
+    
+    # Header row
+    headers = list(processed_df.columns)
+    table_data.append(headers)
+    
+    # Data rows
+    for _, row in processed_df.iterrows():
+        table_data.append(list(row))
+    
+    # Add empty row
+    table_data.append([''] * len(headers))
+    
+    # Add totals
+    table_data.append(['', '', '', '', '', '', '', '', 'SUBTOTAL:', subtotal])
+    table_data.append(['', '', '', '', '', '', '', '', 'PRIOR ADJUSTMENT:', prior_adj])
+    table_data.append(['', '', '', '', '', '', '', '', 'TOTAL:', total])
+    
+    # Create table
+    col_widths = [0.8*inch, 0.5*inch, 0.8*inch, 0.8*inch, 1.0*inch, 1.0*inch, 0.8*inch, 1.0*inch, 0.9*inch, 0.9*inch]
+    
+    table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    
+    # Table style
+    table.setStyle(TableStyle([
+        # Header row
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        
+        # Data rows
+        ('FONTNAME', (0, 1), (-1, -4), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -4), 7),
+        ('ALIGN', (0, 1), (4, -4), 'LEFT'),
+        ('ALIGN', (5, 1), (-1, -4), 'RIGHT'),
+        ('GRID', (0, 0), (-1, -4), 0.5, colors.grey),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        
+        # Alternate row colors
+        ('ROWBACKGROUNDS', (0, 1), (-1, -4), [colors.white, colors.HexColor('#f0f0f0')]),
+        
+        # Totals rows (bold and right-aligned)
+        ('FONTNAME', (0, -3), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -3), (-1, -1), 9),
+        ('ALIGN', (0, -3), (-1, -1), 'RIGHT'),
+        ('LINEABOVE', (0, -3), (-1, -3), 1.5, colors.black),
+        ('LINEBELOW', (0, -1), (-1, -1), 2, colors.black),
+    ]))
+    
+    elements.append(table)
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # Notes section
+    notes_style = ParagraphStyle(
+        'Notes',
+        parent=styles['Normal'],
+        fontSize=8,
+        leftIndent=0.2*inch,
+        spaceAfter=4
+    )
+    
+    notes_title_style = ParagraphStyle(
+        'NotesTitle',
+        parent=styles['Heading3'],
+        fontSize=10,
+        spaceAfter=8,
+        fontName='Helvetica-Bold'
+    )
+    
+    elements.append(Paragraph("Notes:", notes_title_style))
+    elements.append(Paragraph(
+        "<b>Funding Date:</b> Date funds were available for withdrawal from our account. "
+        "\"Pending\" funds are not available for withdrawal. Accounting will confirm funding.",
+        notes_style
+    ))
+    elements.append(Paragraph(
+        "<b>Cash to Seller:</b> Net Cash to Seller on HUD Statement.",
+        notes_style
+    ))
+    elements.append(Paragraph(
+        "<b>Asset Cost:</b> Net Cash from Buyer on HUD Statement + $500 (which includes MLS) + "
+        "Direct Property Expenses, including Photographer, Videographer, Legal, etc.",
+        notes_style
+    ))
+    elements.append(Paragraph(
+        "<b>Reconciliation:</b> All data is subject to a post-payment audit and reconciliation. "
+        "Future Bonuses will be adjusted accordingly, as required.",
+        notes_style
+    ))
+    
+    elements.append(Spacer(1, 0.4*inch))
+    
+    # Signature section
+    sig_title_style = ParagraphStyle(
+        'SigTitle',
+        parent=styles['Heading3'],
+        fontSize=11,
+        spaceAfter=12,
+        fontName='Helvetica-Bold'
+    )
+    
+    elements.append(Paragraph("Signatures:", sig_title_style))
+    
+    # Create signature table
+    if team_members and len(team_members) > 0:
+        # Calculate number of rows needed (2 signatures per row)
+        num_rows = (len(team_members) + 1) // 2
+        
+        sig_data = []
+        for i in range(num_rows):
+            row = []
+            
+            # First signature in row
+            if i * 2 < len(team_members):
+                name = team_members[i * 2]
+                row.append(f"{name}")
+                row.append("_" * 30)  # Signature line
+            else:
+                row.append("")
+                row.append("")
+            
+            # Add spacing column
+            row.append("    ")
+            
+            # Second signature in row
+            if i * 2 + 1 < len(team_members):
+                name = team_members[i * 2 + 1]
+                row.append(f"{name}")
+                row.append("_" * 30)  # Signature line
+            else:
+                row.append("")
+                row.append("")
+            
+            sig_data.append(row)
+        
+        sig_table = Table(sig_data, colWidths=[1.5*inch, 2*inch, 0.3*inch, 1.5*inch, 2*inch])
+        sig_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Names left-aligned
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),  # Signature lines left-aligned
+            ('ALIGN', (3, 0), (3, -1), 'LEFT'),  # Names left-aligned
+            ('ALIGN', (4, 0), (4, -1), 'LEFT'),  # Signature lines left-aligned
+            ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        
+        elements.append(sig_table)
+    
+    # Build PDF
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+    """Export bonus schedule to Excel with formatting"""
+    output = io.BytesIO()
+    
+    # Create Excel writer
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Write main data
+        processed_df.to_excel(writer, sheet_name='Bonus Schedule', index=False, startrow=2)
+        
+        # Get workbook and worksheet
+        workbook = writer.book
+        worksheet = writer.sheets['Bonus Schedule']
+        
+        # Add header
+        worksheet['A1'] = f'Remarkable Land® Bonus Schedule'
+        worksheet['A2'] = f'Month Ending: {month_ending_date.strftime("%m/%d/%Y")}'
+        
+        # Add totals
+        last_row = len(processed_df) + 4
+        worksheet[f'I{last_row}'] = 'SUBTOTAL'
+        worksheet[f'J{last_row}'] = subtotal
+        
+        worksheet[f'I{last_row+1}'] = 'PRIOR ADJUSTMENT'
+        worksheet[f'J{last_row+1}'] = prior_adj
+        
+        worksheet[f'I{last_row+2}'] = 'TOTAL'
+        worksheet[f'J{last_row+2}'] = total
+        
+        # Bold the header
+        from openpyxl.styles import Font, Alignment
+        worksheet['A1'].font = Font(bold=True, size=14)
+        worksheet['A2'].font = Font(bold=True)
+        
+        # Bold totals
+        for row_num in [last_row, last_row+1, last_row+2]:
+            worksheet[f'I{row_num}'].font = Font(bold=True)
+            worksheet[f'J{row_num}'].font = Font(bold=True)
+        
+        # Adjust column widths
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+    
+    output.seek(0)
+    return output
+
 # Main Processing
 if uploaded_file is not None:
     try:
@@ -286,9 +552,33 @@ if uploaded_file is not None:
             # Export Options
             st.header("📥 Download Options")
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
             with col1:
+                # PDF Export with signatures
+                pdf_data = export_to_pdf(
+                    display_df.copy(),
+                    month_ending,
+                    format_currency(subtotal),
+                    format_currency(prior_adjustment),
+                    format_currency(total),
+                    team_list
+                )
+                
+                if pdf_data:
+                    pdf_filename = f"{month_ending.strftime('%Y%m%d')}_Remarkable_Land_Bonus_Schedule.pdf"
+                    
+                    st.download_button(
+                        label="📄 Download PDF",
+                        data=pdf_data,
+                        file_name=pdf_filename,
+                        mime="application/pdf",
+                        help="Professional PDF with signature lines"
+                    )
+                else:
+                    st.info("📦 Install reportlab for PDF export: `pip install reportlab`")
+            
+            with col2:
                 # Excel Export - use formatted display version
                 excel_data = export_to_excel(
                     display_df.copy(), 
@@ -307,7 +597,7 @@ if uploaded_file is not None:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             
-            with col2:
+            with col3:
                 # CSV Export - use formatted display version
                 csv = display_df.to_csv(index=False)
                 csv_filename = f"{month_ending.strftime('%Y%m%d')}_Remarkable_Land_Bonus_Schedule.csv"
@@ -343,13 +633,14 @@ else:
     3. **Upload & Generate:**
        - Upload your CSV file
        - Review the generated bonus schedule
-       - Download as Excel or CSV
+       - Download as PDF (with signatures), Excel, or CSV
     
     ### 💡 Tips:
     - The app automatically filters for properties sold in the selected month
     - Asset Cost = Cost Basis + $500 (MLS) + Direct Expenses
     - Gross Profit = Cash to Seller - Asset Cost
     - All currency values are formatted automatically
+    - **PDF includes signature lines** for all team members
     """)
     
     # Sample data structure
