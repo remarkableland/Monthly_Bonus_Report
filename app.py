@@ -198,7 +198,7 @@ def export_to_excel(processed_df, month_ending_date, subtotal, prior_adj, total)
 def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, team_members):
     """Export bonus schedule to PDF with signature lines"""
     try:
-        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.pagesizes import letter, landscape
         from reportlab.lib import colors
         from reportlab.lib.units import inch
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -209,10 +209,10 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     
     buffer = io.BytesIO()
     
-    # Create PDF
+    # Create PDF in LANDSCAPE orientation
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=letter,
+        pagesize=landscape(letter),  # 11" x 8.5" landscape
         rightMargin=0.5*inch,
         leftMargin=0.5*inch,
         topMargin=0.5*inch,
@@ -261,16 +261,29 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     for _, row in processed_df.iterrows():
         table_data.append(list(row))
     
-    # Add empty row
+    # Add empty row for spacing
     table_data.append([''] * len(headers))
     
-    # Add totals
-    table_data.append(['', '', '', '', '', '', '', '', 'SUBTOTAL:', subtotal])
-    table_data.append(['', '', '', '', '', '', '', '', 'PRIOR ADJUSTMENT:', prior_adj])
-    table_data.append(['', '', '', '', '', '', '', '', 'TOTAL:', total])
+    # Add totals rows
+    empty_cols = [''] * (len(headers) - 2)
+    table_data.append(empty_cols + ['SUBTOTAL:', subtotal])
+    table_data.append(empty_cols + ['PRIOR ADJUSTMENT:', prior_adj])
+    table_data.append(empty_cols + ['TOTAL:', total])
     
-    # Create table
-    col_widths = [0.8*inch, 0.5*inch, 0.8*inch, 0.8*inch, 1.0*inch, 1.0*inch, 0.8*inch, 1.0*inch, 0.9*inch, 0.9*inch]
+    # Create table with adjusted column widths for landscape
+    # Total width available: ~10 inches (11" - 1" margins)
+    col_widths = [
+        0.7*inch,   # Funding Date
+        0.4*inch,   # State
+        0.8*inch,   # County
+        0.9*inch,   # Grantor
+        1.4*inch,   # APN
+        1.1*inch,   # Contract Sales Price
+        0.8*inch,   # Reductions
+        1.1*inch,   # Cash to Seller
+        0.9*inch,   # Asset Cost
+        0.9*inch    # Gross Profit
+    ]
     
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
     
@@ -281,23 +294,26 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('TOPPADDING', (0, 0), (-1, 0), 8),
         
         # Data rows
         ('FONTNAME', (0, 1), (-1, -4), 'Helvetica'),
-        ('FONTSIZE', (0, 1), (-1, -4), 7),
+        ('FONTSIZE', (0, 1), (-1, -4), 8),
         ('ALIGN', (0, 1), (4, -4), 'LEFT'),
         ('ALIGN', (5, 1), (-1, -4), 'RIGHT'),
         ('GRID', (0, 0), (-1, -4), 0.5, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 1), (-1, -4), 4),
+        ('BOTTOMPADDING', (0, 1), (-1, -4), 4),
         
         # Alternate row colors
         ('ROWBACKGROUNDS', (0, 1), (-1, -4), [colors.white, colors.HexColor('#f0f0f0')]),
         
         # Totals rows (bold and right-aligned)
         ('FONTNAME', (0, -3), (-1, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, -3), (-1, -1), 9),
+        ('FONTSIZE', (0, -3), (-1, -1), 10),
         ('ALIGN', (0, -3), (-1, -1), 'RIGHT'),
         ('LINEABOVE', (0, -3), (-1, -3), 1.5, colors.black),
         ('LINEBELOW', (0, -1), (-1, -1), 2, colors.black),
@@ -344,7 +360,7 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
         notes_style
     ))
     
-    elements.append(Spacer(1, 0.4*inch))
+    elements.append(Spacer(1, 0.3*inch))
     
     # Signature section
     sig_title_style = ParagraphStyle(
@@ -357,9 +373,8 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     
     elements.append(Paragraph("Signatures:", sig_title_style))
     
-    # Create signature table
+    # Create signature table - 2 signatures per row for landscape
     if team_members and len(team_members) > 0:
-        # Calculate number of rows needed (2 signatures per row)
         num_rows = (len(team_members) + 1) // 2
         
         sig_data = []
@@ -370,7 +385,7 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
             if i * 2 < len(team_members):
                 name = team_members[i * 2]
                 row.append(f"{name}")
-                row.append("_" * 30)  # Signature line
+                row.append("_" * 35)  # Longer signature line for landscape
             else:
                 row.append("")
                 row.append("")
@@ -382,21 +397,22 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
             if i * 2 + 1 < len(team_members):
                 name = team_members[i * 2 + 1]
                 row.append(f"{name}")
-                row.append("_" * 30)  # Signature line
+                row.append("_" * 35)  # Longer signature line for landscape
             else:
                 row.append("")
                 row.append("")
             
             sig_data.append(row)
         
-        sig_table = Table(sig_data, colWidths=[1.5*inch, 2*inch, 0.3*inch, 1.5*inch, 2*inch])
+        # Wider signature areas for landscape
+        sig_table = Table(sig_data, colWidths=[1.8*inch, 2.5*inch, 0.4*inch, 1.8*inch, 2.5*inch])
         sig_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Names left-aligned
-            ('ALIGN', (1, 0), (1, -1), 'LEFT'),  # Signature lines left-aligned
-            ('ALIGN', (3, 0), (3, -1), 'LEFT'),  # Names left-aligned
-            ('ALIGN', (4, 0), (4, -1), 'LEFT'),  # Signature lines left-aligned
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+            ('ALIGN', (3, 0), (3, -1), 'LEFT'),
+            ('ALIGN', (4, 0), (4, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
             ('TOPPADDING', (0, 0), (-1, -1), 8),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
