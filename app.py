@@ -279,6 +279,7 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     table_data.append(empty_cols + ['SUBTOTAL:', subtotal])
     table_data.append(empty_cols + ['PRIOR ADJUSTMENT:', prior_adj])
     table_data.append(empty_cols + ['TOTAL:', total])
+    table_data.append(empty_cols + ['Properties Sold:', str(len(processed_df))])
     
     # Create table with adjusted column widths for landscape
     # Total width available: ~10.4 inches (11" - 0.6" margins)
@@ -310,23 +311,23 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
         ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),  # Vertical align for wrapped headers
         
         # Data rows
-        ('FONTNAME', (0, 1), (-1, -4), 'Helvetica'),
-        ('FONTSIZE', (0, 1), (-1, -4), 8),
-        ('ALIGN', (0, 1), (4, -4), 'LEFT'),
-        ('ALIGN', (5, 1), (-1, -4), 'RIGHT'),
-        ('GRID', (0, 0), (-1, -4), 0.5, colors.grey),
+        ('FONTNAME', (0, 1), (-1, -5), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -5), 8),
+        ('ALIGN', (0, 1), (4, -5), 'LEFT'),
+        ('ALIGN', (5, 1), (-1, -5), 'RIGHT'),
+        ('GRID', (0, 0), (-1, -5), 0.5, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 1), (-1, -4), 4),
-        ('BOTTOMPADDING', (0, 1), (-1, -4), 4),
+        ('TOPPADDING', (0, 1), (-1, -5), 4),
+        ('BOTTOMPADDING', (0, 1), (-1, -5), 4),
         
         # Alternate row colors
-        ('ROWBACKGROUNDS', (0, 1), (-1, -4), [colors.white, colors.HexColor('#f0f0f0')]),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -5), [colors.white, colors.HexColor('#f0f0f0')]),
         
-        # Totals rows (bold and right-aligned)
-        ('FONTNAME', (0, -3), (-1, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, -3), (-1, -1), 10),
-        ('ALIGN', (0, -3), (-1, -1), 'RIGHT'),
-        ('LINEABOVE', (0, -3), (-1, -3), 1.5, colors.black),
+        # Totals rows (bold and right-aligned) - now includes 4 rows
+        ('FONTNAME', (0, -4), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -4), (-1, -1), 10),
+        ('ALIGN', (0, -4), (-1, -1), 'RIGHT'),
+        ('LINEABOVE', (0, -4), (-1, -4), 1.5, colors.black),
         ('LINEBELOW', (0, -1), (-1, -1), 2, colors.black),
     ]))
     
@@ -647,6 +648,10 @@ else:
        - Upload your CSV file
        - Review the generated bonus schedule
        - Download as PDF (with signatures), Excel, or CSV
+    
+    4. **Circulate for Electronic Signature**
+    
+    5. **Email the Signed Report to accounting@glo.land**
     
     ### 💡 Tips:
     - The app automatically filters for properties sold in the selected month
