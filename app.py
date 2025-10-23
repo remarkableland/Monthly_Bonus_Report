@@ -253,8 +253,18 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     # Prepare table data
     table_data = []
     
-    # Header row
-    headers = list(processed_df.columns)
+    # Header row - use Paragraph objects for wrapping
+    header_style = ParagraphStyle(
+        'HeaderStyle',
+        parent=styles['Normal'],
+        fontSize=9,
+        textColor=colors.whitesmoke,
+        alignment=TA_CENTER,
+        fontName='Helvetica-Bold',
+        leading=10
+    )
+    
+    headers = [Paragraph(str(col), header_style) for col in processed_df.columns]
     table_data.append(headers)
     
     # Data rows
@@ -297,7 +307,7 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
         ('FONTSIZE', (0, 0), (-1, 0), 9),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
         ('TOPPADDING', (0, 0), (-1, 0), 8),
-        ('WORDWRAP', (0, 0), (-1, 0), True),  # Enable header text wrapping
+        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),  # Vertical align for wrapped headers
         
         # Data rows
         ('FONTNAME', (0, 1), (-1, -4), 'Helvetica'),
