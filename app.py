@@ -116,8 +116,8 @@ def process_close_export(df, month_ending_date):
             'County': county,
             'Grantor': grantor,
             'APN': apn,
-            'Contract Sales Price': contract_price,
-            'Reductions': reductions,
+            'Gross Sales Price': contract_price,
+            'Closing Costs': reductions,
             'Cash to Seller': cash_to_seller,
             'Asset Cost': asset_cost,
             'Gross Profit': gross_profit
@@ -135,7 +135,7 @@ def create_bonus_schedule_dataframe(processed_df):
     display_df = processed_df.copy()
     
     # Format currency columns - handle both numeric and string values
-    currency_columns = ['Contract Sales Price', 'Reductions', 'Cash to Seller', 'Asset Cost', 'Gross Profit']
+    currency_columns = ['Gross Sales Price', 'Closing Costs', 'Cash to Seller', 'Asset Cost', 'Gross Profit']
     for col in currency_columns:
         display_df[col] = display_df[col].apply(lambda x: format_currency(float(x)) if pd.notna(x) else "$0.00")
     
@@ -284,12 +284,12 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     # Total width available: ~10.4 inches (11" - 0.6" margins)
     col_widths = [
         0.75*inch,  # Funding Date
-        0.45*inch,  # State
+        0.5*inch,   # State (widened to prevent "State" from wrapping)
         0.85*inch,  # County
         1.0*inch,   # Grantor
         2.0*inch,   # APN (widened significantly)
-        1.15*inch,  # Contract Sales Price
-        0.85*inch,  # Reductions
+        1.15*inch,  # Gross Sales Price
+        0.8*inch,   # Closing Costs
         1.15*inch,  # Cash to Seller
         0.95*inch,  # Asset Cost
         0.95*inch   # Gross Profit
@@ -354,15 +354,6 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     elements.append(Paragraph(
         "<b>Funding Date:</b> Date funds were available for withdrawal from our account. "
         "\"Pending\" funds are not available for withdrawal. Accounting will confirm funding.",
-        notes_style
-    ))
-    elements.append(Paragraph(
-        "<b>Cash to Seller:</b> Net Cash to Seller on HUD Statement.",
-        notes_style
-    ))
-    elements.append(Paragraph(
-        "<b>Asset Cost:</b> Net Cash from Buyer on HUD Statement + $500 (which includes MLS) + "
-        "Direct Property Expenses, including Photographer, Videographer, Legal, etc.",
         notes_style
     ))
     elements.append(Paragraph(
@@ -554,11 +545,6 @@ if uploaded_file is not None:
             **Funding Date:** Date funds were available for withdrawal from our account. 
             "Pending" funds are not available for withdrawal. Accounting will confirm funding.
             
-            **Cash to Seller:** Net Cash to Seller on HUD Statement.
-            
-            **Asset Cost:** Net Cash from Buyer on HUD Statement + $500 (which includes MLS) + 
-            Direct Property Expenses, including Photographer, Videographer, Legal, etc.
-            
             **Reconciliation:** All data is subject to a post-payment audit and reconciliation. 
             Future Bonuses will be adjusted accordingly, as required.
             """)
@@ -648,9 +634,9 @@ else:
     ### 📋 Instructions:
     
     1. **Export from Close.com:**
-       - Go to your "Selling Land" organization
-       - Filter for sold properties
-       - Export as CSV
+       - Go to the "Selling Land" organization
+       - Select the "📊 Bonus Report" smartview
+       - Export as "All Fields"
     
     2. **Configure Settings:**
        - Set the month ending date (left sidebar)
