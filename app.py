@@ -209,14 +209,14 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     
     buffer = io.BytesIO()
     
-    # Create PDF in LANDSCAPE orientation
+    # Create PDF in LANDSCAPE orientation with narrower margins
     doc = SimpleDocTemplate(
         buffer,
         pagesize=landscape(letter),  # 11" x 8.5" landscape
-        rightMargin=0.5*inch,
-        leftMargin=0.5*inch,
-        topMargin=0.5*inch,
-        bottomMargin=0.5*inch
+        rightMargin=0.3*inch,
+        leftMargin=0.3*inch,
+        topMargin=0.3*inch,
+        bottomMargin=0.3*inch
     )
     
     # Container for the 'Flowable' objects
@@ -271,18 +271,18 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
     table_data.append(empty_cols + ['TOTAL:', total])
     
     # Create table with adjusted column widths for landscape
-    # Total width available: ~10 inches (11" - 1" margins)
+    # Total width available: ~10.4 inches (11" - 0.6" margins)
     col_widths = [
-        0.7*inch,   # Funding Date
-        0.4*inch,   # State
-        0.8*inch,   # County
-        0.9*inch,   # Grantor
-        1.4*inch,   # APN
-        1.1*inch,   # Contract Sales Price
-        0.8*inch,   # Reductions
-        1.1*inch,   # Cash to Seller
-        0.9*inch,   # Asset Cost
-        0.9*inch    # Gross Profit
+        0.75*inch,  # Funding Date
+        0.45*inch,  # State
+        0.85*inch,  # County
+        1.0*inch,   # Grantor
+        2.0*inch,   # APN (widened significantly)
+        1.15*inch,  # Contract Sales Price
+        0.85*inch,  # Reductions
+        1.15*inch,  # Cash to Seller
+        0.95*inch,  # Asset Cost
+        0.95*inch   # Gross Profit
     ]
     
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
@@ -297,6 +297,7 @@ def export_to_pdf(processed_df, month_ending_date, subtotal, prior_adj, total, t
         ('FONTSIZE', (0, 0), (-1, 0), 9),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
         ('TOPPADDING', (0, 0), (-1, 0), 8),
+        ('WORDWRAP', (0, 0), (-1, 0), True),  # Enable header text wrapping
         
         # Data rows
         ('FONTNAME', (0, 1), (-1, -4), 'Helvetica'),
